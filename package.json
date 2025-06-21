@@ -1,0 +1,22 @@
+{
+  "name": "ai-chrome-sidepanel-backend",
+  "version": "1.0.0",
+  "description": "API REST para integração com AWS Bedrock",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.x",
+    "cors": "^2.8.5",
+    "dotenv": "^16.x",
+    "express": "^4.x",
+    "serverless-http": "^3.x"
+  },
+  "devDependencies": {
+    "nodemon": "^3.x",
+    "serverless": "^3.x",
+    "serverless-offline": "^12.x"
+  }
+}

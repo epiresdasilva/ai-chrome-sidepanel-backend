@@ -1,0 +1,294 @@
+service: ai-chrome-sidepanel-backend
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ${param:AWS_REGION, 'us-east-1'}
+  memorySize: 1024
+  timeout: 30
+  logRetentionInDays: 14
+  environment:
+    NODE_ENV: serverless
+    BEDROCK_REGION: ${param:BEDROCK_REGION, 'us-east-1'}
+    MODEL_ID: ${param:MODEL_ID, 'amazon.nova-lite-v1:0'}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - bedrock:InvokeModel
+            - bedrock:InvokeModelWithResponseStream
+          Resource: "*"
+
+plugins:
+  - serverless-offline
+
+custom:
+  ecsCluster: ${self:service}-${sls:stage}
+  containerName: ${self:service}-container
+  containerPort: 8080
+  albPort: 80
+  albHealthCheckPath: /health
+  vpc:
+    securityGroupIds:
+      - !Ref ServiceSecurityGroup
+    subnetIds:
+      - !Ref PublicSubnet1
+      - !Ref PublicSubnet2
+
+resources:
+  Resources:
+    # VPC Configuration
+    VPC:
+      Type: AWS::EC2::VPC
+      Properties:
+        CidrBlock: 10.0.0.0/16
+        EnableDnsSupport: true
+        EnableDnsHostnames: true
+        Tags:
+          - Key: Name
+            Value: ${self:service}-vpc
+
+    PublicSubnet1:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref VPC
+        AvailabilityZone: ${self:provider.region}a
+        CidrBlock: 10.0.1.0/24
+        MapPublicIpOnLaunch: true
+        Tags:
+          - Key: Name
+            Value: ${self:service}-public-subnet-1
+
+    PublicSubnet2:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref VPC
+        AvailabilityZone: ${self:provider.region}b
+        CidrBlock: 10.0.2.0/24
+        MapPublicIpOnLaunch: true
+        Tags:
+          - Key: Name
+            Value: ${self:service}-public-subnet-2
+
+    InternetGateway:
+      Type: AWS::EC2::InternetGateway
+      Properties:
+        Tags:
+          - Key: Name
+            Value: ${self:service}-igw
+
+    InternetGatewayAttachment:
+      Type: AWS::EC2::VPCGatewayAttachment
+      Properties:
+        VpcId: !Ref VPC
+        InternetGatewayId: !Ref InternetGateway
+
+    PublicRouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId: !Ref VPC
+        Tags:
+          - Key: Name
+            Value: ${self:service}-public-rt
+
+    PublicRoute:
+      Type: AWS::EC2::Route
+      DependsOn: InternetGatewayAttachment
+      Properties:
+        RouteTableId: !Ref PublicRouteTable
+        DestinationCidrBlock: 0.0.0.0/0
+        GatewayId: !Ref InternetGateway
+
+    PublicSubnet1RouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref PublicSubnet1
+        RouteTableId: !Ref PublicRouteTable
+
+    PublicSubnet2RouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref PublicSubnet2
+        RouteTableId: !Ref PublicRouteTable
+
+    # Security Groups
+    LoadBalancerSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Security group for ALB
+        VpcId: !Ref VPC
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: ${self:custom.albPort}
+            ToPort: ${self:custom.albPort}
+            CidrIp: 0.0.0.0/0
+
+    ServiceSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Security group for ECS service
+        VpcId: !Ref VPC
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: ${self:custom.containerPort}
+            ToPort: ${self:custom.containerPort}
+            SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+
+    # ECS Cluster
+    ECSCluster:
+      Type: AWS::ECS::Cluster
+      Properties:
+        ClusterName: ${self:custom.ecsCluster}
+
+    # Task Definition
+    TaskDefinition:
+      Type: AWS::ECS::TaskDefinition
+      Properties:
+        Family: ${self:service}-task
+        Cpu: '512'
+        Memory: '1024'
+        NetworkMode: awsvpc
+        RequiresCompatibilities:
+          - FARGATE
+        ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
+        TaskRoleArn: !GetAtt ECSTaskRole.Arn
+        ContainerDefinitions:
+          - Name: ${self:custom.containerName}
+            Image: ${param:ECR_REPOSITORY_URI, '363223992648.dkr.ecr.us-east-1.amazonaws.com/ai-chrome-sidepanel-backend'}:latest
+            Essential: true
+            PortMappings:
+              - ContainerPort: ${self:custom.containerPort}
+            Environment:
+              - Name: BEDROCK_REGION
+                Value: ${param:BEDROCK_REGION, 'us-east-1'}
+              - Name: MODEL_ID
+                Value: ${param:MODEL_ID, 'amazon.nova-lite-v1:0'}
+              - Name: NODE_ENV
+                Value: production
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref CloudWatchLogsGroup
+                awslogs-region: ${self:provider.region}
+                awslogs-stream-prefix: ecs
+
+    # ECS Service
+    ECSService:
+      Type: AWS::ECS::Service
+      DependsOn: LoadBalancerListener
+      Properties:
+        ServiceName: ${self:service}-service
+        Cluster: !Ref ECSCluster
+        TaskDefinition: !Ref TaskDefinition
+        DesiredCount: 1
+        LaunchType: FARGATE
+        NetworkConfiguration:
+          AwsvpcConfiguration:
+            AssignPublicIp: ENABLED
+            SecurityGroups:
+              - !Ref ServiceSecurityGroup
+            Subnets:
+              - !Ref PublicSubnet1
+              - !Ref PublicSubnet2
+        LoadBalancers:
+          - ContainerName: ${self:custom.containerName}
+            ContainerPort: ${self:custom.containerPort}
+            TargetGroupArn: !Ref TargetGroup
+
+    # IAM Roles
+    ECSExecutionRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: ecs-tasks.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+    ECSTaskRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: ecs-tasks.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: BedrockAccess
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - bedrock:InvokeModel
+                    - bedrock:InvokeModelWithResponseStream
+                  Resource: "*"
+
+    # CloudWatch Logs
+    CloudWatchLogsGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /ecs/${self:service}
+        RetentionInDays: ${self:provider.logRetentionInDays}
+
+    # Application Load Balancer
+    LoadBalancer:
+      Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+      Properties:
+        Name: ${self:service}-alb
+        Scheme: internet-facing
+        LoadBalancerAttributes:
+          - Key: idle_timeout.timeout_seconds
+            Value: '60'
+        SecurityGroups:
+          - !Ref LoadBalancerSecurityGroup
+        Subnets:
+          - !Ref PublicSubnet1
+          - !Ref PublicSubnet2
+
+    TargetGroup:
+      Type: AWS::ElasticLoadBalancingV2::TargetGroup
+      Properties:
+        Name: ${self:service}-tg
+        Port: ${self:custom.containerPort}
+        Protocol: HTTP
+        TargetType: ip
+        VpcId: !Ref VPC
+        HealthCheckPath: ${self:custom.albHealthCheckPath}
+        HealthCheckIntervalSeconds: 30
+        HealthCheckTimeoutSeconds: 5
+        HealthyThresholdCount: 2
+        UnhealthyThresholdCount: 3
+        TargetGroupAttributes:
+          - Key: deregistration_delay.timeout_seconds
+            Value: '30'
+
+    LoadBalancerListener:
+      Type: AWS::ElasticLoadBalancingV2::Listener
+      Properties:
+        DefaultActions:
+          - Type: forward
+            TargetGroupArn: !Ref TargetGroup
+        LoadBalancerArn: !Ref LoadBalancer
+        Port: ${self:custom.albPort}
+        Protocol: HTTP
+
+  Outputs:
+    ApiEndpoint:
+      Description: URL of the API endpoint
+      Value: !Join ['', ['http://', !GetAtt LoadBalancer.DNSName]]
+    ECSCluster:
+      Description: ECS Cluster Name
+      Value: !Ref ECSCluster
+    ECSService:
+      Description: ECS Service Name
+      Value: !Ref ECSService
