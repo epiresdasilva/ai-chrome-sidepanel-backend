@@ -153,3 +153,5 @@ curl -X POST https://<load-balancer-url>/ask \
     "content": "Texto para ser resumido aqui..."
   }'
 ```
+
+Este backend foi desenvolvido para a extensão do Chrome que pode ser obtida aqui: https://github.com/epiresdasilva/ai-chrome-sidepanel-frontend
