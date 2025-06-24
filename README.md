@@ -35,16 +35,6 @@ API REST para integração com AWS Bedrock, implementada com Node.js e Express.j
 - Docker instalado (para build e teste local)
 - Serverless Framework v3
 
-## Variáveis de Ambiente para Desenvolvimento Local
-
-Crie um arquivo `.env` na raiz do projeto com as seguintes variáveis:
-
-```
-BEDROCK_REGION=us-east-1
-MODEL_ID=amazon.nova-lite-v1:0
-PORT=3000
-```
-
 ## Instalação
 
 ```bash
@@ -69,10 +59,12 @@ aws ecr create-repository --repository-name ai-chrome-sidepanel-backend
 
 ```bash
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com
-docker build -t ai-chrome-sidepanel-backend .
+docker build --platform linux/amd64 -t ai-chrome-sidepanel-backend .
 docker tag ai-chrome-sidepanel-backend:latest <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/ai-chrome-sidepanel-backend:latest
 docker push <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/ai-chrome-sidepanel-backend:latest
 ```
+
+**Nota:** O parâmetro `--platform linux/amd64` é importante para garantir compatibilidade com o ECS Fargate, especialmente ao fazer build em máquinas com chip Apple Silicon (M1/M2/M3).
 
 ### 3. Deploy com Serverless Framework
 
@@ -86,16 +78,55 @@ serverless deploy --param="BEDROCK_REGION=us-east-1" --param="MODEL_ID=amazon.no
 
 O serverless.yml está configurado com valores padrão, mas você pode sobrescrevê-los usando os parâmetros na linha de comando conforme mostrado acima.
 
+### 4. Atualização de Código (sem mudanças na infraestrutura)
+
+Para atualizações que envolvem apenas mudanças no código da aplicação:
+
+```bash
+# 1. Build e push da nova imagem Docker (passos 2 acima)
+docker build --platform linux/amd64 -t ai-chrome-sidepanel-backend .
+docker tag ai-chrome-sidepanel-backend:latest <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/ai-chrome-sidepanel-backend:latest
+docker push <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/ai-chrome-sidepanel-backend:latest
+
+# 2. Forçar novo deployment no ECS (sem recriar infraestrutura)
+aws ecs update-service --cluster ai-chrome-sidepanel-backend-dev --service ai-chrome-sidepanel-backend-service --region us-east-1
+```
+
+**Nota:** O comando `update-service` força o ECS a fazer pull da nova imagem e reiniciar os containers sem precisar executar `serverless deploy` novamente.
+
 ## Uso da API
 
 ### Endpoint: POST /ask
 
-**Request:**
+**Parâmetros obrigatórios:**
+- `action`: Ação a ser executada (`resumir`, `simplificar`, `extrair_dados`, `reescrever`, `pergunta`)
+- `language`: Idioma da resposta (`pt-BR`, `pt-PT`, `en`, `es`)
+- `content`: Conteúdo a ser processado
+- `userInput`: Pergunta do usuário (obrigatório apenas para action `pergunta`)
 
-```json
-{
-  "prompt": "Qual é a capital do Brasil?"
-}
+**Exemplo de Request - Resumir texto:**
+
+```bash
+curl -X POST https://<load-balancer-url>/ask \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "resumir",
+    "language": "pt-BR",
+    "content": "Este é um texto longo que precisa ser resumido. Contém várias informações importantes sobre o projeto e suas funcionalidades."
+  }'
+```
+
+**Exemplo de Request - Fazer pergunta:**
+
+```bash
+curl -X POST https://<load-balancer-url>/ask \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "pergunta",
+    "language": "pt-BR",
+    "content": "A inteligência artificial é uma área da ciência da computação que se concentra na criação de sistemas capazes de realizar tarefas que normalmente requerem inteligência humana.",
+    "userInput": "O que é inteligência artificial?"
+  }'
 ```
 
 **Response:**
@@ -103,8 +134,22 @@ O serverless.yml está configurado com valores padrão, mas você pode sobrescre
 O servidor responde com um stream de eventos no formato SSE (Server-Sent Events):
 
 ```
-data: {"text":"A capital do Brasil é Brasília"}
+data: {"text":"Resumo do texto: Este projeto implementa funcionalidades de IA..."}
 
 event: complete
 data: {}
+```
+
+**Exemplo de teste com curl (streaming):**
+
+```bash
+curl -X POST https://<load-balancer-url>/ask \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -N \
+  -d '{
+    "action": "resumir",
+    "language": "pt-BR",
+    "content": "Texto para ser resumido aqui..."
+  }'
 ```
