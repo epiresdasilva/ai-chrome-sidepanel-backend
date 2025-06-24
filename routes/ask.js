@@ -95,12 +95,9 @@ router.post('/', async (req, res) => {
         error: 'userInput is required for "pergunta" action' 
       });
     }
-    
-    // Build the prompt
-    const prompt = buildPrompt({ action, language, content, userInput });
-    
+
     // Estimate tokens and check if within limits
-    const estimatedTokens = estimateTokens(prompt);
+    const estimatedTokens = estimateTokens(userInput);
     const MAX_TOKENS = 4000; // Example limit
     
     if (estimatedTokens > MAX_TOKENS) {
@@ -110,7 +107,10 @@ router.post('/', async (req, res) => {
         maxTokens: MAX_TOKENS 
       });
     }
-    
+
+    // Build the prompt
+    const prompt = buildPrompt({ action, language, content, userInput });
+        
     // Set headers for SSE
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
