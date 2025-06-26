@@ -22,8 +22,8 @@ provider:
             - bedrock:InvokeModelWithResponseStream
           Resource: "*"
 
-plugins:
-  - serverless-offline
+# plugins:
+#   - serverless-offline
 
 custom:
   ecsCluster: ${self:service}-${sls:stage}
@@ -31,95 +31,15 @@ custom:
   containerPort: 8080
   albPort: 80
   albHealthCheckPath: /health
-  vpc:
-    securityGroupIds:
-      - !Ref ServiceSecurityGroup
-    subnetIds:
-      - !Ref PublicSubnet1
-      - !Ref PublicSubnet2
 
 resources:
   Resources:
-    # VPC Configuration
-    VPC:
-      Type: AWS::EC2::VPC
-      Properties:
-        CidrBlock: 10.0.0.0/16
-        EnableDnsSupport: true
-        EnableDnsHostnames: true
-        Tags:
-          - Key: Name
-            Value: ${self:service}-vpc
-
-    PublicSubnet1:
-      Type: AWS::EC2::Subnet
-      Properties:
-        VpcId: !Ref VPC
-        AvailabilityZone: ${self:provider.region}a
-        CidrBlock: 10.0.1.0/24
-        MapPublicIpOnLaunch: true
-        Tags:
-          - Key: Name
-            Value: ${self:service}-public-subnet-1
-
-    PublicSubnet2:
-      Type: AWS::EC2::Subnet
-      Properties:
-        VpcId: !Ref VPC
-        AvailabilityZone: ${self:provider.region}b
-        CidrBlock: 10.0.2.0/24
-        MapPublicIpOnLaunch: true
-        Tags:
-          - Key: Name
-            Value: ${self:service}-public-subnet-2
-
-    InternetGateway:
-      Type: AWS::EC2::InternetGateway
-      Properties:
-        Tags:
-          - Key: Name
-            Value: ${self:service}-igw
-
-    InternetGatewayAttachment:
-      Type: AWS::EC2::VPCGatewayAttachment
-      Properties:
-        VpcId: !Ref VPC
-        InternetGatewayId: !Ref InternetGateway
-
-    PublicRouteTable:
-      Type: AWS::EC2::RouteTable
-      Properties:
-        VpcId: !Ref VPC
-        Tags:
-          - Key: Name
-            Value: ${self:service}-public-rt
-
-    PublicRoute:
-      Type: AWS::EC2::Route
-      DependsOn: InternetGatewayAttachment
-      Properties:
-        RouteTableId: !Ref PublicRouteTable
-        DestinationCidrBlock: 0.0.0.0/0
-        GatewayId: !Ref InternetGateway
-
-    PublicSubnet1RouteTableAssociation:
-      Type: AWS::EC2::SubnetRouteTableAssociation
-      Properties:
-        SubnetId: !Ref PublicSubnet1
-        RouteTableId: !Ref PublicRouteTable
-
-    PublicSubnet2RouteTableAssociation:
-      Type: AWS::EC2::SubnetRouteTableAssociation
-      Properties:
-        SubnetId: !Ref PublicSubnet2
-        RouteTableId: !Ref PublicRouteTable
-
-    # Security Groups
+    # Security Groups (usando VPC padrão)
     LoadBalancerSecurityGroup:
       Type: AWS::EC2::SecurityGroup
       Properties:
         GroupDescription: Security group for ALB
-        VpcId: !Ref VPC
+        VpcId: ${param:VPC_ID, 'vpc-94dcdeef'}
         SecurityGroupIngress:
           - IpProtocol: tcp
             FromPort: ${self:custom.albPort}
@@ -130,7 +50,7 @@ resources:
       Type: AWS::EC2::SecurityGroup
       Properties:
         GroupDescription: Security group for ECS service
-        VpcId: !Ref VPC
+        VpcId: ${param:VPC_ID, 'vpc-94dcdeef'}
         SecurityGroupIngress:
           - IpProtocol: tcp
             FromPort: ${self:custom.containerPort}
@@ -191,8 +111,8 @@ resources:
             SecurityGroups:
               - !Ref ServiceSecurityGroup
             Subnets:
-              - !Ref PublicSubnet1
-              - !Ref PublicSubnet2
+              - ${param:SUBNET_1, 'subnet-f1ca1f96'}
+              - ${param:SUBNET_2, 'subnet-62f33a4c'}
         LoadBalancers:
           - ContainerName: ${self:custom.containerName}
             ContainerPort: ${self:custom.containerPort}
@@ -252,8 +172,8 @@ resources:
         SecurityGroups:
           - !Ref LoadBalancerSecurityGroup
         Subnets:
-          - !Ref PublicSubnet1
-          - !Ref PublicSubnet2
+          - ${param:SUBNET_1, 'subnet-f1ca1f96'}
+          - ${param:SUBNET_2, 'subnet-62f33a4c'}
 
     TargetGroup:
       Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -262,7 +182,7 @@ resources:
         Port: ${self:custom.containerPort}
         Protocol: HTTP
         TargetType: ip
-        VpcId: !Ref VPC
+        VpcId: ${param:VPC_ID, 'vpc-94dcdeef'}
         HealthCheckPath: ${self:custom.albHealthCheckPath}
         HealthCheckIntervalSeconds: 30
         HealthCheckTimeoutSeconds: 5
